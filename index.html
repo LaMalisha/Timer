@@ -315,7 +315,7 @@
         const closeModalButton = document.getElementById('closeModalButton');
         
 
-        // Mappa dei colori con HEX Code (Sobria/Minimal - AGGIORNATA)
+        // Mappa dei colori con HEX Code (Sobria/Minimal)
         const COLOR_MAP = {
             'Focus Working': { style: 'focus-style', labelColor: 'text-blue-400', hexColor: '#3b82f6', barColorVar: 'var(--color-focus)', modalColor: 'blue' },
             'WorkOut': { style: 'workout-style', labelColor: 'text-teal-400', hexColor: '#14b8a6', barColorVar: 'var(--color-workout)', modalColor: 'teal' }, 
@@ -475,12 +475,12 @@
             updateVisualizer();
         };
 
-        /** Carica i valori del preset negli input */
-        const loadPreset = (preset, category) => {
+        /** Carica i valori del preset negli input e AVVIA IL TIMER (NUOVA FUNZIONE) */
+        const loadAndStartPreset = (preset, category) => {
             pauseTimer(); 
             resetPomodoroState(); 
 
-            // Imposta gli input per la modalità manuale
+            // Imposta gli input per la modalità manuale (necessario per visualizzare il tempo prima del reset)
             hoursInput.value = preset.hours;
             minutesInput.value = preset.minutes;
             secondsInput.value = preset.seconds;
@@ -488,17 +488,19 @@
             const h = parseInt(hoursInput.value) || 0;
             const m = parseInt(minutesInput.value) || 0;
             const s = parseInt(secondsInput.value) || 0;
+            
             totalSecondsRemaining = h * 3600 + m * 60 + s;
             totalSecondsInitial = totalSecondsRemaining;
             
             lastPresetCategory = category; 
 
+            // Assicurati che il display sia aggiornato
             updateDisplay(); 
-            updateButtonState(false);
             
-            applyDynamicStyles(category, false); 
+            // Avvia il timer immediatamente dopo aver impostato i valori
+            startTimer(); 
             
-            showModal("Preset Caricato", `Caricato il timer: **${preset.name}**.`);
+            showModal("Preset Avviato", `Avviato il timer: **${preset.name}**.`);
         };
         
         /** Funzione per riprodurre il suono della Campana Tibetana */
@@ -740,7 +742,7 @@
             });
         });
 
-        // Gestione Preset Standard (Focus Working e WorkOut)
+        // Gestione Preset Standard (Focus Working e WorkOut) - ORA A PARTENZA IMMEDIATA
         document.querySelectorAll('.preset-button').forEach(button => {
             button.addEventListener('click', () => {
                 const name = button.dataset.name;
@@ -748,12 +750,12 @@
                 const h = parseInt(button.dataset.h) || 0;
                 const m = parseInt(button.dataset.m) || 0;
                 const s = parseInt(button.dataset.s) || 0;
-
-                loadPreset({ name: name, hours: h, minutes: m, seconds: s }, category);
+                
+                loadAndStartPreset({ name: name, hours: h, minutes: m, seconds: s }, category);
             });
         });
         
-        // Gestione Preset Pomodoro Automatico
+        // Gestione Preset Pomodoro Automatico (Già a partenza immediata)
         document.querySelectorAll('.pomodoro-start-button').forEach(button => {
             button.addEventListener('click', () => {
                 pauseTimer();

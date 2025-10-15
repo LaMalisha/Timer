@@ -3,188 +3,388 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Timer Analizzatore Spettrale</title>
+    <title>Timer Multiuso</title>
     <!-- Caricamento di Tailwind CSS per uno stile moderno e responsive -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK per autenticazione e Firestore -->
+    <script type="module">
+        // --- IMPORTS FIREBASE (Devono essere al livello più alto del modulo) ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel, collection, onSnapshot, addDoc, deleteDoc, doc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        window.firebaseReady = false;
+        
+        if (firebaseConfig) {
+            const app = initializeApp(firebaseConfig);
+            window.db = getFirestore(app); // Accessibile globalmente
+            window.auth = getAuth(app); // Accessibile globalmente
+            setLogLevel('Debug');
+
+            // Autenticazione e setup dell'ascoltatore
+            onAuthStateChanged(window.auth, async (user) => {
+                if (user) {
+                    console.log("Utente autenticato. ID:", user.uid);
+                } else {
+                    console.log("Nessun utente. Tentativo di accesso anonimo...");
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(window.auth, initialAuthToken);
+                            console.log("Accesso con token personalizzato riuscito.");
+                        } else {
+                            await signInAnonymously(window.auth);
+                            console.log("Accesso anonimo riuscito.");
+                        }
+                    } catch (error) {
+                        console.error("Errore durante l'autenticazione Firebase:", error);
+                    }
+                }
+                // Segnala che Firebase è pronto per le operazioni
+                window.firebaseReady = true;
+                // Chiama la funzione di caricamento dei dati se definita
+                if (typeof window.loadUserPresets === 'function') {
+                    window.loadUserPresets();
+                }
+            });
+            
+            // Rendi le funzioni Firestore accessibili globalmente (usate nella logica del timer)
+            window.firestore = {
+                collection: collection,
+                onSnapshot: onSnapshot,
+                addDoc: addDoc,
+                deleteDoc: deleteDoc,
+                doc: doc,
+                query: query,
+                getUserId: () => window.auth.currentUser?.uid || 'anonymous',
+                getAppId: () => appId,
+            };
+
+        } else {
+            console.warn("Configurazione Firebase non trovata. Funzionalità Firestore disabilitata.");
+        }
+    </script>
     <!-- Impostazioni di configurazione e font -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body { font-family: 'Inter', sans-serif; }
         
-        /* 1. Animazione del Bagliore Pulsante */
-        @keyframes pulse-glow {
-            0% { text-shadow: 0 0 8px rgba(0, 255, 255, 0.4); }
-            50% { text-shadow: 0 0 20px rgba(0, 255, 255, 0.8), 0 0 10px rgba(0, 255, 255, 1); }
-            100% { text-shadow: 0 0 8px rgba(0, 255, 255, 0.4); }
-        }
-
-        /* 2. Stile del Testo Rimosso da Qualsiasi Contenitore */
-        .timer-text {
-            font-size: 4.5rem; /* Testo grande e prominente */
-            letter-spacing: 4px;
-            font-weight: 800;
-            color: #e2e8f0; 
-            background-color: transparent; 
-            padding: 0; /* Rimuovi padding */
-            /* SOLO NEON GLOW SUL TESTO */
-            text-shadow: 0 0 10px rgba(0, 255, 255, 0.8), 0 0 20px rgba(0, 255, 255, 0.6);
-            /* Centrato e libero di fluttuare */
-            z-index: 10;
+        /* Definizione dei Colori Neon per gli Stili */
+        :root {
+            --color-focus: #00aaff;   /* Blu Elettrico (Focus) */
+            --color-workout: #ff33cc; /* Magenta (WorkOut) */
+            --color-pomodoro: #ff3333; /* Rosso Neon (Ciclo Pomodoro) */
+            --color-default: #ff7f00; /* Arancione Neon (Reset/Standard) */
+            --color-text-glow: #ffffff; /* Bianco per Bagliore */
         }
         
-        /* 3. Applicazione del Glow Pulsante al Testo in Esecuzione */
-        .timer-running {
-            animation: pulse-glow 2s infinite alternate ease-in-out;
+        /* Animazione del Bagliore Pulsante sul Testo */
+        @keyframes pulse-glow {
+            0% { text-shadow: 0 0 10px rgba(255, 255, 255, 0.5); }
+            50% { text-shadow: 0 0 25px var(--color-text-glow), 0 0 12px rgba(0, 255, 255, 1); }
+            100% { text-shadow: 0 0 10px rgba(255, 255, 255, 0.5); }
         }
 
-        /* --- STILI ANALIZZATORE SPETTRALE (VISUALIZZATORE AUDIO) --- */
+        /* Stile del Testo Principale (Alto Contrasto) */
+        .timer-text {
+            font-size: 5rem;
+            letter-spacing: 5px;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 0 15px rgba(255, 255, 255, 0.9), 0 0 30px rgba(255, 255, 255, 0.7);
+            z-index: 10;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        /* Applicazione del Glow Pulsante quando in esecuzione */
+        .timer-running {
+            animation: pulse-glow 2s infinite alternate ease-in-out;
+            opacity: 1;
+        }
+        
+        /* Stato di Pausa */
+        .timer-paused {
+            opacity: 0.6;
+            animation: none;
+        }
 
+        /* --- VISUALIZZATORE AUDIO SPETTRALE --- */
         .visualizer-container {
             display: flex;
-            align-items: flex-end; /* Le barre crescono dal basso */
+            align-items: flex-end; 
             justify-content: space-between;
-            width: 100%;
+            width: 120%; 
             height: 100%;
-            padding: 1rem;
-            position: absolute; /* Copre il timer senza interferire con i numeri */
+            position: absolute; 
             top: 0;
-            left: 0;
-            pointer-events: none; /* Rende il visualizzatore cliccabile attraverso */
+            left: -10%; 
+            pointer-events: none; 
         }
 
         .audio-bar {
-            width: 6px; /* Larghezza della barra */
-            background-color: #00ffff; /* Colore Neon Cyan di default */
-            box-shadow: 0 0 5px rgba(0, 255, 255, 0.8);
-            border-radius: 3px 3px 0 0; /* Angoli arrotondati in alto */
+            width: 7px; 
+            background-color: var(--color-default);
+            box-shadow: 0 0 5px rgba(255, 127, 0, 0.4); 
+            border-radius: 3px 3px 0 0; 
             transition: height 0.1s linear;
+            margin-right: 2px;
+            min-height: 5%; 
         }
-
-        /* Classi dinamiche per il colore/glow del visualizzatore */
+        
+        /* Stili dinamici per le barre (Colore per ESECUZIONE) */
         .focus-style .audio-bar {
-            background-color: #00ffff; /* Cyan */
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+            box-shadow: 0 0 10px var(--color-focus);
         }
         .workout-style .audio-bar {
-            background-color: #34d399; /* Emerald Green */
-            box-shadow: 0 0 10px rgba(52, 211, 153, 0.8);
+            box-shadow: 0 0 10px var(--color-workout);
         }
-        
-        /* Animazione per simulare il movimento delle onde sonore */
-        @keyframes bounce-bar-1 { 0%, 100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
-        @keyframes bounce-bar-2 { 0%, 100% { transform: scaleY(0.8); } 40% { transform: scaleY(0.4); } }
-        @keyframes bounce-bar-3 { 0%, 100% { transform: scaleY(1); } 60% { transform: scaleY(0.6); } }
-        @keyframes bounce-bar-4 { 0%, 100% { transform: scaleY(0.4); } 70% { transform: scaleY(0.9); } }
-        
-        /* Posizionamento del Timer e Visualizzatore */
+        .pomodoro-style .audio-bar {
+            box-shadow: 0 0 10px var(--color-pomodoro);
+        }
+        .default-style .audio-bar {
+            box-shadow: 0 0 10px var(--color-default);
+        }
+
+        /* Stile che si applica quando il timer è in PAUSA/RESET (dimming) */
+        .dimmed-style .audio-bar {
+            opacity: 0.5;
+            box-shadow: none !important; 
+        }
+
         .timer-visual-area {
             position: relative;
-            width: 300px;
-            height: 150px; /* Altezza per il visualizzatore e il testo */
+            width: 400px;
+            height: 150px; 
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             margin-bottom: 2rem;
+            transition: all 0.3s ease;
+        }
+        
+        .control-button {
+            padding: 1rem 1.5rem;
+            border-radius: 1rem;
+            font-size: 1.125rem;
+            transition: all 0.3s ease;
+        }
+        .control-button:hover {
+            transform: translateY(-2px);
+        }
+        .shadow-green-900\/50 { box-shadow: 0 8px 15px rgba(16, 185, 129, 0.3); }
+        .shadow-yellow-900\/50 { box-shadow: 0 8px 15px rgba(251, 191, 36, 0.3); }
+        .shadow-red-900\/50 { box-shadow: 0 8px 15px rgba(239, 68, 68, 0.3); }
+        .control-button:disabled {
+            box-shadow: none;
+        }
+        
+        #currentState {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            transition: color 0.3s ease;
+            z-index: 10;
+        }
+        
+        /* Stile del Contatore Pomodoro */
+        #pomodoroCounter {
+            position: absolute;
+            bottom: -30px;
+            right: 0;
+            font-size: 1rem;
+            font-weight: 600;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.5rem;
+            background-color: rgba(255, 51, 51, 0.1); /* Sfondo Rosso Leggero */
+            color: var(--color-pomodoro);
+            border: 1px solid rgba(255, 51, 51, 0.5);
+            transition: opacity 0.3s ease;
+            opacity: 0; /* Nascondi per default */
+        }
+        
+        /* Contenitore per le 3 Sezioni Preset */
+        .preset-grid {
+            display: grid;
+            gap: 1.5rem; /* 6 in Tailwind */
+            grid-template-columns: repeat(1, minmax(0, 1fr));
+        }
+
+        @media (min-width: 1024px) {
+            .preset-grid-lg {
+                grid-template-columns: repeat(2, minmax(0, 1fr)); /* Due colonne su desktop */
+            }
+        }
+        @media (min-width: 1280px) {
+             .preset-grid-lg {
+                grid-template-columns: repeat(3, minmax(0, 1fr)); /* Tre colonne su schermi molto larghi */
+            }
         }
 
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen p-4 sm:p-8 flex flex-col items-center">
 
-    <h1 class="text-4xl font-bold mb-10 text-cyan-400">Timer Analizzatore Spettrale</h1>
+    <h1 class="text-4xl font-bold mb-4 text-orange-400">Timer Multiuso</h1>
+    <div id="userIdDisplay" class="text-sm text-gray-500 mb-8 p-1 px-3 bg-gray-800 rounded-full">
+        ID Utente: Caricamento...
+    </div>
 
-    <main class="w-full max-w-6xl flex flex-col lg:flex-row gap-8">
+    <main class="w-full max-w-7xl flex flex-col lg:flex-row gap-8">
         
         <!-- SEZIONE TIMER PRINCIPALE -->
-        <section class="lg:w-1/2 bg-gray-800 p-6 rounded-2xl shadow-2xl border border-gray-700">
-            <h2 class="text-2xl font-semibold mb-6 text-center text-cyan-300">Il Tuo Timer</h2>
+        <section class="lg:w-1/2 bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700">
+            <h2 class="text-2xl font-semibold mb-6 text-center text-orange-300">Il Tuo Timer</h2>
 
             <!-- Display del Timer con Visualizzatore -->
             <div class="flex justify-center">
-                <div id="timerVisualArea" class="timer-visual-area">
+                <div id="timerVisualArea" class="timer-visual-area default-style dimmed-style"> 
                     
-                    <!-- Il Testo del Timer (completamente libero e neon) -->
-                    <div id="timerDisplay" class="timer-text">00:00:00</div>
+                    <!-- 1. Etichetta dello Stato Corrente (LAVORO/PAUSA) -->
+                    <div id="currentState" class="text-orange-400">RESET</div>
 
-                    <!-- Visualizzatore Audio (nuovo elemento) -->
+                    <!-- 2. Il Testo del Timer -->
+                    <div id="timerDisplay" class="timer-text timer-paused">00:00:00</div>
+                    
+                    <!-- 3. Contatore Pomodoro -->
+                    <div id="pomodoroCounter">Ciclo: 0 / 4</div>
+
+                    <!-- 4. Visualizzatore Audio -->
                     <div id="visualizerContainer" class="visualizer-container">
                         <!-- Le barre saranno generate qui via JavaScript -->
                     </div>
                 </div>
             </div>
 
-            <!-- Input per Impostare il Tempo (Nessun cambiamento qui) -->
-            <div class="flex justify-center space-x-4 mb-8">
+            <!-- Input per Impostare il Tempo (Usato solo per la modalità manuale) -->
+            <div class="flex justify-center space-x-4 mb-8 mt-6">
                 <div class="flex flex-col items-center">
                     <label for="hours" class="text-sm text-gray-400">Ore (H)</label>
-                    <input type="number" id="hours" min="0" max="99" value="0" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition">
+                    <input type="number" id="hours" min="0" max="99" value="0" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition">
                 </div>
                 <div class="flex flex-col items-center">
                     <label for="minutes" class="text-sm text-gray-400">Minuti (M)</label>
-                    <input type="number" id="minutes" min="0" max="59" value="20" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition">
+                    <input type="number" id="minutes" min="0" max="59" value="0" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition">
                 </div>
                 <div class="flex flex-col items-center">
                     <label for="seconds" class="text-sm text-gray-400">Secondi (S)</label>
-                    <input type="number" id="seconds" min="0" max="59" value="0" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition">
+                    <input type="number" id="seconds" min="0" max="59" value="0" class="w-16 p-2 bg-gray-700 border border-gray-600 rounded-lg text-center text-xl focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition">
                 </div>
             </div>
 
-            <!-- Controlli Timer (Nessun cambiamento qui) -->
+            <!-- Controlli Timer -->
             <div class="flex justify-center space-x-4 mb-6">
-                <button id="startButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg shadow-green-900/50 flex items-center disabled:opacity-50">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197 2.132A1 1 0 0110 13.168V8.832a1 1 0 011.555-.832l3.197 2.132c.243.161.243.515 0 .676z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <button id="startButton" class="control-button bg-green-600 hover:bg-green-700 text-white font-bold transition shadow-lg shadow-green-900/50 flex items-center disabled:opacity-50">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197 2.132A1 1 0 0110 13.168V8.832a1 1 0 011.555-.832l3.197 2.132c.243.161.243.515 0 .676z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     Avvia
                 </button>
-                <button id="pauseButton" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg shadow-yellow-900/50 flex items-center disabled:opacity-50" disabled>
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/24/24/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <button id="pauseButton" class="control-button bg-yellow-600 hover:bg-yellow-700 text-white font-bold transition shadow-lg shadow-yellow-900/50 flex items-center disabled:opacity-50" disabled>
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/24/24/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     Pausa
                 </button>
-                <button id="resetButton" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg shadow-red-900/50 flex items-center">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.958 8.958 0 0120 12a9 9 0 01-9 9m-4.502-14.075a.999.999 0 01-.252-.45c-.173-.55-.615-.71-1.165-.436-.549.273-.72.715-.546 1.265A10 10 0 0021.2 12c.708 0 1.284.576 1.284 1.284v.041c0 .708-.576 1.284-1.284 1.284-3.52 0-6.72-.258-9.6-.745a.999.999 0 01-.735-1.29 1 1 0 011.3-.735c2.474.4 4.885.545 7.185.545.24 0 .445.195.45.435.005.239-.19.44-.43.44zm-14-1.921A9.002 9.002 0 013 12a9 9 0 019-9c.708 0 1.284.576 1.284 1.284v.041c0 .708-.576 1.284-1.284 1.284-3.52 0-6.72-.258-9.6-.745a.999.999 0 01-.735-1.29 1 1 0 011.3-.735c2.474.4 4.885.545 7.185.545.24 0 .445.195.45.435.005.239-.19.44-.43.44z"></path></svg>
+                <button id="resetButton" class="control-button bg-red-600 hover:bg-red-700 text-white font-bold transition shadow-lg shadow-red-900/50 flex items-center">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.958 8.958 0 0120 12a9 9 0 01-9 9m-4.502-14.075a.999.999 0 01-.252-.45c-.173-.55-.615-.71-1.165-.436-.549.273-.72.715-.546 1.265A10 10 0 0021.2 12c.708 0 1.284.576 1.284 1.284v.041c0 .708-.576 1.284-1.284 1.284-3.52 0-6.72-.258-9.6-.745a.999.999 0 01-.735-1.29 1 1 0 011.3-.735c2.474.4 4.885.545 7.185.545.24 0 .445.195.45.435.005.239-.19.44-.43.44zm-14-1.921A9.002 9.002 0 013 12a9 9 0 019-9c.708 0 1.284.576 1.284 1.284v.041c0 .708-.576 1.284-1.284 1.284-3.52 0-6.72-.258-9.6-.745a.999.999 0 01-.735-1.29 1 1 0 011.3-.735c2.474.4 4.885.545 7.185.545.24 0 .445.195.45.435.005.239-.19.44-.43.44z"></path></svg>
                     Reset
                 </button>
             </div>
 
         </section>
 
-        <!-- SEZIONE PRESET DIVISA IN DUE COLONNE (Nessun cambiamento qui) -->
-        <section class="lg:w-1/2 presets-container">
-
-            <!-- COLONNA 1: FOCUS WORKING -->
+        <!-- SEZIONE PRESET (Sistema + Utente) -->
+        <section class="lg:w-1/2 flex flex-col gap-8">
+            
+            <!-- Preset di Sistema -->
             <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl border border-gray-700">
-                <h2 class="text-2xl font-semibold mb-6 text-center text-cyan-300">Focus Working (Pomodoro)</h2>
-                <div id="presetsList" class="space-y-3">
-                    <!-- 1. Timer Pomodoro da 20 minuti -->
-                    <button data-h="0" data-m="20" data-s="0" data-category="Focus Working" data-name="Timer Pomodoro" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-cyan-500/30">
-                        <span class="font-medium text-cyan-200">Timer Pomodoro</span>
-                        <span class="text-sm text-gray-400">00:20:00</span>
-                    </button>
-                    <!-- 2. Timer Pausa Breve da 5 minuti -->
-                    <button data-h="0" data-m="5" data-s="0" data-category="Focus Working" data-name="Pausa Breve" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-cyan-500/30">
-                        <span class="font-medium text-cyan-200">Pausa Breve</span>
-                        <span class="text-sm text-gray-400">00:05:00</span>
-                    </button>
-                    <!-- 3. Timer Pausa Lunga da 15 minuti -->
-                    <button data-h="0" data-m="15" data-s="0" data-category="Focus Working" data-name="Pausa Lunga" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-cyan-500/30">
-                        <span class="font-medium text-cyan-200">Pausa Lunga</span>
-                        <span class="text-sm text-gray-400">00:15:00</span>
-                    </button>
+                <h2 class="text-2xl font-semibold mb-6 text-orange-300">Preset di Sistema</h2>
+                <div class="preset-grid preset-grid-lg">
+                    <!-- COLONNA 1: FOCUS WORKING (BLU ELETTRICO) -->
+                    <div>
+                        <h3 class="text-lg font-semibold mb-3 text-blue-400">Focus Working</h3>
+                        <div id="focusWorkingPresets" class="space-y-3">
+                            <!-- Preset Lavoro (25m) -->
+                            <button data-h="0" data-m="25" data-s="0" data-category="Focus Working" data-name="Sessione di Lavoro (25m)" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-blue-500/30">
+                                <span class="font-medium text-blue-200">Sessione di Lavoro</span>
+                                <span class="text-sm text-gray-400">00:25:00</span>
+                            </button>
+                            
+                            <!-- Pausa Breve (5m) -->
+                            <button data-h="0" data-m="5" data-s="0" data-category="Focus Working" data-name="Pausa Breve (5m)" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-blue-500/30">
+                                <span class="font-medium text-blue-200">Pausa Breve</span>
+                                <span class="text-sm text-gray-400">00:05:00</span>
+                            </button>
+
+                            <!-- Pausa Lunga (15m) -->
+                            <button data-h="0" data-m="15" data-s="0" data-category="Focus Working" data-name="Pausa Lunga (15m)" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-blue-500/30">
+                                <span class="font-medium text-blue-200">Pausa Lunga</span>
+                                <span class="text-sm text-gray-400">00:15:00</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- COLONNA 2: CICLO POMODORO (ROSSO NEON) -->
+                    <div>
+                        <h3 class="text-lg font-semibold mb-3 text-red-400">Ciclo Pomodoro</h3>
+                        <div id="pomodoroPresets" class="space-y-3">
+                            <!-- Pulsante Avvio Ciclo AUTOMATICO 25/5/15 -->
+                            <button data-work="25" data-short="5" data-long="15" data-cycles="4" data-category="Pomodoro Cycle" data-name="Avvia Ciclo 25/5" class="pomodoro-start-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-red-500/30">
+                                <span class="font-medium text-red-200">Pomodoro 25/5 (x4 Cicli)</span>
+                                <span class="text-sm text-gray-400">25' Lavoro / 5' Pausa</span>
+                            </button>
+                            
+                            <!-- Ciclo 50/10 -->
+                            <button data-work="50" data-short="10" data-long="30" data-cycles="2" data-category="Pomodoro Cycle" data-name="Avvia Ciclo 50/10" class="pomodoro-start-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:hover:shadow-red-500/30">
+                                <span class="font-medium text-red-200">Pomodoro 50/10 (x2 Cicli)</span>
+                                <span class="text-sm text-gray-400">50' Lavoro / 10' Pausa</span>
+                            </button>
+                            
+                            <!-- WORKOUT & SALUTE (30s e 1m) -->
+                            <h3 class="text-lg font-semibold mt-6 mb-3 text-pink-400">WorkOut & Salute</h3>
+                            <button data-h="0" data-m="1" data-s="0" data-category="WorkOut" data-name="Pausa Lunga/Ristoro (1m)" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-pink-500/30">
+                                <span class="font-medium text-pink-200">Pausa Lunga/Ristoro</span>
+                                <span class="text-sm text-gray-400">00:01:00</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
-            
-            <!-- COLONNA 2: WORKOUT -->
+
+            <!-- SEZIONE I TUOI PRESET (DINAMICA) -->
             <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl border border-gray-700">
-                <h2 class="text-2xl font-semibold mb-6 text-center text-green-300">WorkOut (Interval Training)</h2>
-                <div id="workoutPresetsList" class="space-y-3">
-                    <!-- 1. Pausa Breve (30 secondi) -->
-                    <button data-h="0" data-m="0" data-s="30" data-category="WorkOut" data-name="Recupero Rapido" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-green-500/30">
-                        <span class="font-medium text-green-200">Recupero Rapido</span>
-                        <span class="text-sm text-gray-400">00:00:30</span>
-                    </button>
-                    <!-- 2. Pausa Lunga (1 minuto) -->
-                    <button data-h="0" data-m="1" data-s="0" data-category="WorkOut" data-name="Recupero Attivo" class="preset-button w-full flex items-center justify-between bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition shadow-md hover:shadow-green-500/30">
-                        <span class="font-medium text-green-200">Recupero Attivo</span>
-                        <span class="text-sm text-gray-400">00:01:00</span>
+                <h2 class="text-2xl font-semibold mb-6 text-green-400">I Tuoi Preset (Salvati su Firestore)</h2>
+                <div id="userPresetsContainer" class="space-y-3">
+                    <p id="noPresetsMessage" class="text-gray-500 italic">Nessun preset salvato. Usare la sezione "Crea Nuovo Preset" qui sotto.</p>
+                    <!-- I preset degli utenti verranno iniettati qui da JavaScript -->
+                </div>
+            </div>
+
+            <!-- SEZIONE CREA NUOVO PRESET (MANUALE) -->
+            <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl border border-gray-700">
+                <h2 class="text-2xl font-semibold mb-4 text-orange-300">Crea Nuovo Preset</h2>
+                <div class="flex flex-col space-y-4">
+                    <input type="text" id="newPresetName" placeholder="Nome del Preset (es: Focus 45m)" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 transition">
+                    
+                    <div class="flex justify-between space-x-2">
+                        <div class="flex flex-col items-center flex-1">
+                            <label for="newPresetHours" class="text-sm text-gray-400">Ore</label>
+                            <input type="number" id="newPresetHours" min="0" max="99" value="0" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-lg text-center">
+                        </div>
+                        <div class="flex flex-col items-center flex-1">
+                            <label for="newPresetMinutes" class="text-sm text-gray-400">Minuti</label>
+                            <input type="number" id="newPresetMinutes" min="0" max="59" value="0" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-lg text-center">
+                        </div>
+                        <div class="flex flex-col items-center flex-1">
+                            <label for="newPresetSeconds" class="text-sm text-gray-400">Secondi</label>
+                            <input type="number" id="newPresetSeconds" min="0" max="59" value="0" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-lg text-center">
+                        </div>
+                    </div>
+
+                    <button id="savePresetButton" class="control-button bg-orange-600 hover:bg-orange-700 text-white font-bold transition shadow-lg shadow-orange-900/50 flex items-center justify-center">
+                        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-6 4v5m-3-2h6m4-2a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-8z"></path></svg>
+                        Salva Preset
                     </button>
                 </div>
             </div>
@@ -193,30 +393,39 @@
 
     </main>
 
-    <!-- Modale per Messaggi (es. Timer scaduto) -->
+    <!-- Modale per Messaggi -->
     <div id="messageModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-cyan-400 w-96 text-center">
-            <h3 id="modalTitle" class="text-3xl font-bold text-cyan-400 mb-4">Timer Scaduto!</h3>
-            <p id="modalMessage" class="text-lg text-gray-200 mb-6">Il tempo è finito. Ben fatto!</p>
-            <button id="closeModalButton" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-xl transition shadow-md">Chiudi</button>
+        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-blue-400 w-96 text-center">
+            <h3 id="modalTitle" class="text-3xl font-bold text-blue-400 mb-4">Timer Scaduto!</h3>
+            <p id="modalMessage" class="text-lg text-gray-200 mb-6"></p>
+            <button id="closeModalButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-xl transition shadow-md">Chiudi</button>
         </div>
     </div>
 
     <!-- Sezione JavaScript -->
     <script type="module">
-        // Variabili Globali
+        // Variabili Globali per il Timer
         let countdownInterval;
         let visualizerInterval;
         let totalSecondsRemaining = 0;
         let timerRunning = false;
         let totalSecondsInitial = 0; 
-        let lastPresetCategory = 'Focus Working'; 
-        let fetchedTip = { text: null, sources: [] }; 
-        const NUM_BARS = 20; // Numero di barre del visualizzatore
+        let lastPresetCategory = 'Default'; 
+        let audioContext;
+
+        // Nuove Variabili per la Modalità Pomodoro Automatica
+        let isAutomaticMode = false;
+        let pomodoroCount = 0; // Pomodori completati (max N prima della pausa lunga)
+        let currentMode = 'IDLE'; // 'IDLE', 'WORK', 'SHORT_BREAK', 'LONG_BREAK'
+        let pomodoroTimes = { work: 25 * 60, short: 5 * 60, long: 15 * 60, totalCycles: 4 };
+        
+        const NUM_BARS = 25; 
 
         // Elementi DOM
         const timerDisplay = document.getElementById('timerDisplay');
-        const visualizerContainer = document.getElementById('visualizerContainer'); // Nuovo elemento
+        const currentStateLabel = document.getElementById('currentState'); 
+        const pomodoroCounterDisplay = document.getElementById('pomodoroCounter');
+        const visualizerContainer = document.getElementById('visualizerContainer'); 
         const timerVisualArea = document.getElementById('timerVisualArea');
         const hoursInput = document.getElementById('hours');
         const minutesInput = document.getElementById('minutes');
@@ -224,88 +433,336 @@
         const startButton = document.getElementById('startButton');
         const pauseButton = document.getElementById('pauseButton');
         const resetButton = document.getElementById('resetButton');
+        const userIdDisplay = document.getElementById('userIdDisplay');
         
-        // Liste dei Preset
-        const focusPresetsList = document.getElementById('presetsList');
-        const workoutPresetsList = document.getElementById('workoutPresetsList');
-
+        // Elementi DOM per i Preset Utente
+        const userPresetsContainer = document.getElementById('userPresetsContainer');
+        const noPresetsMessage = document.getElementById('noPresetsMessage');
+        const newPresetNameInput = document.getElementById('newPresetName');
+        const newPresetHoursInput = document.getElementById('newPresetHours');
+        const newPresetMinutesInput = document.getElementById('newPresetMinutes');
+        const newPresetSecondsInput = document.getElementById('newPresetSeconds');
+        const savePresetButton = document.getElementById('savePresetButton');
+        
         const messageModal = document.getElementById('messageModal');
         const closeModalButton = document.getElementById('closeModalButton');
+        
 
-        let audioContext;
+        // Mappa dei colori con HEX Code
+        const COLOR_MAP = {
+            'Focus Working': { style: 'focus-style', labelColor: 'text-blue-400', hexColor: '#00aaff', barColorVar: 'var(--color-focus)', modalColor: 'blue' },
+            'WorkOut': { style: 'workout-style', labelColor: 'text-pink-400', hexColor: '#ff33cc', barColorVar: 'var(--color-workout)', modalColor: 'pink' }, 
+            'Pomodoro Cycle': { style: 'pomodoro-style', labelColor: 'text-red-400', hexColor: '#ff3333', barColorVar: 'var(--color-pomodoro)', modalColor: 'red' }, 
+            'Default': { style: 'default-style', labelColor: 'text-orange-400', hexColor: '#ff7f00', barColorVar: 'var(--color-default)', modalColor: 'orange' },
+            'Personalizzato': { style: 'default-style', labelColor: 'text-green-400', hexColor: '#10b981', barColorVar: 'var(--color-default)', modalColor: 'green' } 
+        };
+        
+        // --- FUNZIONI FIRESTORE ---
+
+        /** Costruisce il percorso privato per i dati dell'utente */
+        const getUserPresetsPath = () => {
+            if (window.firestore && window.firestore.getUserId()) {
+                const appId = window.firestore.getAppId();
+                const userId = window.firestore.getUserId();
+                // Percorso: /artifacts/{appId}/users/{userId}/presets
+                return window.firestore.collection(window.db, `artifacts/${appId}/users/${userId}/presets`);
+            }
+            return null;
+        };
+
+        /** Carica i preset dell'utente in tempo reale */
+        window.loadUserPresets = () => {
+            const presetsRef = getUserPresetsPath();
+            if (!presetsRef) {
+                console.error("Firestore non pronto o utente non autenticato.");
+                userIdDisplay.textContent = "ID Utente: Autenticazione Fallita";
+                return;
+            }
+            
+            userIdDisplay.textContent = `ID Utente: ${window.firestore.getUserId()}`;
+
+            // Usa onSnapshot per ascoltare i cambiamenti in tempo reale
+            window.firestore.onSnapshot(presetsRef, (snapshot) => {
+                const presets = [];
+                snapshot.forEach((doc) => {
+                    presets.push({ id: doc.id, ...doc.data() });
+                });
+                renderUserPresets(presets);
+            }, (error) => {
+                console.error("Errore nell'ascolto dei preset:", error);
+                showModal("Errore Database", "Non è stato possibile caricare i tuoi preset dal database.");
+            });
+        };
+
+        /** Salva un nuovo preset nel database */
+        const saveNewPreset = async () => {
+            const name = newPresetNameInput.value.trim();
+            const h = parseInt(newPresetHoursInput.value) || 0;
+            const m = parseInt(newPresetMinutesInput.value) || 0;
+            const s = parseInt(newPresetSecondsInput.value) || 0;
+            const totalSeconds = h * 3600 + m * 60 + s;
+
+            if (!name || totalSeconds <= 0) {
+                showModal("Attenzione", "Devi inserire un nome valido e un tempo maggiore di zero.");
+                return;
+            }
+            
+            const presetsRef = getUserPresetsPath();
+            if (!presetsRef) {
+                 showModal("Errore", "Impossibile salvare: Autenticazione non completa.");
+                 return;
+            }
+
+            try {
+                await window.firestore.addDoc(presetsRef, {
+                    name,
+                    hours: h,
+                    minutes: m,
+                    seconds: s,
+                    category: 'Personalizzato', // Categoria per i preset utente
+                    createdAt: new Date().toISOString()
+                });
+
+                newPresetNameInput.value = '';
+                newPresetHoursInput.value = '0';
+                newPresetMinutesInput.value = '0';
+                newPresetSecondsInput.value = '0';
+                showModal("Preset Salvato!", `Il preset "**${name}**" è stato aggiunto con successo.`);
+
+            } catch (error) {
+                console.error("Errore nel salvataggio del preset:", error);
+                showModal("Errore Salvataggio", "Non è stato possibile salvare il preset nel database.");
+            }
+        };
+
+        /** Rimuove un preset dal database */
+        const deletePreset = async (presetId, presetName) => {
+            // Nota: Non usiamo `confirm()` quindi l'azione è diretta o usiamo una modale custom. Qui usiamo l'azione diretta per semplicità.
+            const userConfirmed = true; 
+
+            if (userConfirmed) {
+                 try {
+                     const docRef = window.firestore.doc(window.db, getUserPresetsPath().path, presetId);
+                     await window.firestore.deleteDoc(docRef);
+                     showModal("Cancellato", `Il preset "**${presetName}**" è stato eliminato.`);
+                 } catch (error) {
+                     console.error("Errore nella cancellazione del preset:", error);
+                     showModal("Errore Cancellazione", "Non è stato possibile eliminare il preset.");
+                 }
+            }
+        };
+
+        /** Renderizza i preset dell'utente nel contenitore dedicato */
+        const renderUserPresets = (presets) => {
+            userPresetsContainer.innerHTML = ''; // Pulisce il contenitore
+            
+            if (presets.length === 0) {
+                noPresetsMessage.classList.remove('hidden');
+                return;
+            }
+
+            noPresetsMessage.classList.add('hidden');
+
+            presets.forEach(preset => {
+                const timeString = formatTime(preset.hours * 3600 + preset.minutes * 60 + preset.seconds);
+                
+                const presetDiv = document.createElement('div');
+                presetDiv.className = 'flex justify-between items-center bg-gray-700 p-3 rounded-xl transition shadow-md hover:shadow-green-500/30';
+                
+                presetDiv.innerHTML = `
+                    <button data-id="${preset.id}" data-h="${preset.hours}" data-m="${preset.minutes}" data-s="${preset.seconds}" data-category="${preset.category}" data-name="${preset.name}" class="user-preset-button flex-1 flex justify-between items-center bg-transparent border-none p-0 cursor-pointer">
+                        <span class="font-medium text-green-200">${preset.name}</span>
+                        <span class="text-sm text-gray-400">${timeString}</span>
+                    </button>
+                    <button data-id="${preset.id}" data-name="${preset.name}" class="delete-preset-button ml-4 p-1 rounded-full text-red-400 hover:bg-red-900/50 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                `;
+                
+                userPresetsContainer.appendChild(presetDiv);
+            });
+            
+            // Re-aggiungi gli event listener ai nuovi pulsanti
+            document.querySelectorAll('.user-preset-button').forEach(button => {
+                button.addEventListener('click', () => {
+                    const name = button.dataset.name;
+                    const category = button.dataset.category;
+                    const h = parseInt(button.dataset.h) || 0;
+                    const m = parseInt(button.dataset.m) || 0;
+                    const s = parseInt(button.dataset.s) || 0;
+
+                    loadPreset({ name: name, hours: h, minutes: m, seconds: s }, category);
+                });
+            });
+
+            document.querySelectorAll('.delete-preset-button').forEach(button => {
+                button.addEventListener('click', () => {
+                    const id = button.dataset.id;
+                    const name = button.dataset.name;
+                    deletePreset(id, name);
+                });
+            });
+
+        };
+        
+        // --- FUNZIONE MANCANTE (Fix per ReferenceError) ---
+        /** Aggiorna il testo del contatore Pomodoro */
+        const updatePomodoroCounter = () => {
+            pomodoroCounterDisplay.textContent = `Ciclo: ${pomodoroCount} / ${pomodoroTimes.totalCycles}`;
+            // Mostra il contatore solo se in modalità automatica
+            pomodoroCounterDisplay.style.opacity = isAutomaticMode ? 1 : 0;
+        };
 
 
-        // --- FUNZIONI VISUALIZZATORE SPETTRALE ---
+        // --- LOGICA MODALITÀ AUTOMATICA POMODORO ---
+
+        /** Inizializza o passa al ciclo successivo nel Pomodoro Automatico */
+        const startNextPomodoroCycle = () => {
+            // 1. Ferma eventuali timer precedenti
+            clearInterval(countdownInterval);
+            clearInterval(visualizerInterval);
+            timerRunning = false;
+            
+            let timeToSet;
+            let nextMode;
+            const nextCategory = 'Pomodoro Cycle'; // Forza la categoria Pomodoro per l'automatico
+
+            if (currentMode === 'WORK' || currentMode === 'IDLE') {
+                if (currentMode === 'WORK') {
+                    pomodoroCount++;
+                }
+
+                if (pomodoroCount >= pomodoroTimes.totalCycles) {
+                    timeToSet = pomodoroTimes.long;
+                    nextMode = 'LONG_BREAK';
+                    showModal("Ciclo Lunga Pausa", `Complimenti! **${pomodoroTimes.totalCycles} cicli** completati. Inizia la pausa lunga di **${pomodoroTimes.long / 60} minuti**.`);
+                } else {
+                    timeToSet = pomodoroTimes.short;
+                    nextMode = 'SHORT_BREAK';
+                    if (currentMode === 'WORK') {
+                        showModal("Ciclo Pausa Breve", `Ottimo lavoro! Pomodoro ${pomodoroCount}/${pomodoroTimes.totalCycles} completato. Inizia la pausa breve di **${pomodoroTimes.short / 60} minuti**.`);
+                    } else {
+                        timeToSet = pomodoroTimes.work;
+                        nextMode = 'WORK';
+                    }
+                }
+            } else { // Siamo in Pausa (Breve o Lunga), torniamo al Lavoro
+                timeToSet = pomodoroTimes.work;
+                nextMode = 'WORK';
+                
+                if (currentMode === 'LONG_BREAK') {
+                    pomodoroCount = 0;
+                    showModal("Ricomincia il Ciclo", `La pausa lunga è terminata. Ripartono i cicli di Lavoro!`);
+                } else if (currentMode === 'SHORT_BREAK') {
+                    showModal("Torna al Lavoro", `La pausa breve è terminata. Torna alla sessione di Lavoro!`);
+                }
+            }
+            
+            if (currentMode === 'IDLE') {
+                timeToSet = pomodoroTimes.work;
+                nextMode = 'WORK';
+            }
+            
+            currentMode = nextMode;
+            lastPresetCategory = nextCategory; 
+            totalSecondsRemaining = timeToSet;
+            totalSecondsInitial = timeToSet;
+
+            updateDisplay();
+            updatePomodoroCounter();
+            startTimer(); 
+        };
+
+        /** Resetta lo stato del Pomodoro Automatico */
+        const resetPomodoroState = () => {
+            isAutomaticMode = false;
+            pomodoroCount = 0;
+            currentMode = 'IDLE';
+            updatePomodoroCounter();
+            pomodoroCounterDisplay.style.opacity = 0;
+        };
+
+        // --- FUNZIONI UI E UTILITY (Aggiunte le logiche per l'Automazione) ---
         
         /** Genera le barre del visualizzatore all'avvio */
         const createVisualizerBars = () => {
-            visualizerContainer.innerHTML = ''; // Pulisce prima
+            visualizerContainer.innerHTML = ''; 
             for (let i = 0; i < NUM_BARS; i++) {
                 const bar = document.createElement('div');
                 bar.className = 'audio-bar';
-                // Imposta un'altezza iniziale bassa
                 bar.style.height = '10%'; 
-                // Aggiunge un delay e una durata per l'effetto onda animata
-                bar.style.animation = `bounce-bar-${(i % 4) + 1} 1.5s infinite alternate ease-in-out ${i * 0.05}s`;
                 visualizerContainer.appendChild(bar);
             }
         };
 
-        /** Aggiorna l'altezza delle barre in base al tempo rimanente
-         * (Simula il "volume" in base al tempo, rendendolo un indicatore)
-         */
+        /** Aggiorna l'altezza delle barre in base al tempo rimanente */
         const updateVisualizer = () => {
-            if (totalSecondsInitial === 0 || !timerRunning) {
-                // Se non è in esecuzione, mantiene le barre a un livello basso (silenzio)
-                Array.from(visualizerContainer.children).forEach(bar => {
-                    bar.style.height = '10%';
-                    bar.style.opacity = '0.5';
-                    bar.style.animationPlayState = 'paused'; // Ferma l'animazione di pulsazione
+            const isPausedOrReset = !timerRunning;
+            const bars = Array.from(visualizerContainer.children);
+            const currentStyleInfo = COLOR_MAP[lastPresetCategory] || COLOR_MAP['Default'];
+            const barHexColor = currentStyleInfo.hexColor;
+            
+            if (isPausedOrReset) {
+                bars.forEach(bar => {
+                    bar.style.height = '15%'; 
+                    bar.style.opacity = '0.4';
+                    bar.style.backgroundColor = barHexColor;
                 });
                 return;
             }
-
-            const percentageRemaining = totalSecondsRemaining / totalSecondsInitial; // 1 (pieno) a 0 (vuoto)
             
-            // La "media" dell'onda si abbassa man mano che il tempo si esaurisce
-            const baseLevel = 10 + (percentageRemaining * 50); // 60% a 10%
+            const percentageRemaining = totalSecondsRemaining / totalSecondsInitial; 
+            const baseLevel = 15 + (percentageRemaining * 50); 
             
-            Array.from(visualizerContainer.children).forEach((bar, i) => {
-                // Oscillazione casuale per l'effetto onda sonora
-                const randomFactor = Math.random() * 20; // Massima variazione 20%
-                const barHeight = Math.min(100, baseLevel + randomFactor);
-                
-                bar.style.height = `${barHeight}%`;
+            bars.forEach((bar) => {
                 bar.style.opacity = '1';
-                bar.style.animationPlayState = 'running'; // Avvia l'animazione
+                bar.style.backgroundColor = barHexColor; 
+                const randomFactor = Math.random() * 20; 
+                const barHeight = Math.min(100, baseLevel + randomFactor);
+                bar.style.height = `${barHeight}%`;
             });
         };
 
         /** Funzione per applicare lo stile CSS dinamico in base alla categoria */
-        const applyDynamicStyles = (category) => {
-            // Rimuove tutte le classi di stile dinamiche esistenti
-            timerVisualArea.classList.remove('focus-style', 'workout-style');
-            timerDisplay.classList.remove('timer-running');
+        const applyDynamicStyles = (category, isRunning) => {
+            const currentStyle = COLOR_MAP[category] || COLOR_MAP['Default'];
             
-            if (category === 'Focus Working') {
-                timerVisualArea.classList.add('focus-style');
-            } else if (category === 'WorkOut') {
-                timerVisualArea.classList.add('workout-style');
-            }
+            // 1. Rimuovi tutte le vecchie classi di stile
+            timerVisualArea.classList.remove('focus-style', 'workout-style', 'pomodoro-style', 'default-style', 'dimmed-style');
+            timerDisplay.classList.remove('timer-running', 'timer-paused');
+            currentStateLabel.classList.remove(...Object.values(COLOR_MAP).map(c => c.labelColor), 'text-gray-400');
             
-            // Aggiunge l'animazione di pulsazione solo quando il timer è avviato
-            if (timerRunning) {
+            // 2. Applica la classe di colore del PRESET
+            timerVisualArea.classList.add(currentStyle.style);
+            
+            if (isRunning) {
                 timerDisplay.classList.add('timer-running');
+                
+                let labelText = category.toUpperCase();
+                if (isAutomaticMode) {
+                    labelText = currentMode === 'WORK' ? "LAVORO POMODORO" : 
+                                currentMode === 'SHORT_BREAK' ? "PAUSA BREVE" :
+                                currentMode === 'LONG_BREAK' ? "PAUSA LUNGA" : "LAVORO";
+                }
+                currentStateLabel.textContent = labelText;
+                currentStateLabel.classList.add(currentStyle.labelColor);
+                
+            } else { 
+                timerDisplay.classList.add('timer-paused');
+                currentStateLabel.textContent = isAutomaticMode && currentMode !== 'IDLE' ? `PAUSA ${currentMode.replace('_', ' ')}` : "RESET";
+                currentStateLabel.classList.add('text-gray-400'); 
+                timerVisualArea.classList.add('dimmed-style');
             }
+            
+            updateVisualizer();
         };
 
-
-        // --- FUNZIONI UI E UTILITY ---
-
-        /** Carica i valori del preset negli input */
+        /** Carica i valori del preset negli input - Usato per preset standard e utente */
         const loadPreset = (preset, category) => {
             pauseTimer(); 
-            
+            resetPomodoroState(); 
+
+            // Imposta gli input per la modalità manuale (necessario per start/reset)
             hoursInput.value = preset.hours;
             minutesInput.value = preset.minutes;
             secondsInput.value = preset.seconds;
@@ -317,21 +774,17 @@
             totalSecondsInitial = totalSecondsRemaining;
             
             lastPresetCategory = category; 
-            fetchedTip = { text: null, sources: [] }; 
 
             updateDisplay(); 
             updateButtonState(false);
             
-            // Applica immediatamente gli stili del preset
-            applyDynamicStyles(category);
-            updateVisualizer(); // Aggiorna il visualizzatore allo stato "in pausa"
-
+            applyDynamicStyles(category, false); 
+            
             showModal("Preset Caricato", `Caricato il timer: **${preset.name}**.`);
         };
         
-        /** Funzione per riprodurre un suono di "Campana Tibetana" */
+        /** Funzione per riprodurre il suono della Campana Tibetana (ENHANCED) */
         const playGong = () => {
-             // Utilizza la stessa logica di generazione audio del file precedente
              try {
                 if (!audioContext) {
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -341,116 +794,39 @@
                     audioContext.resume();
                 }
 
-                const duration = 5.0; 
                 const now = audioContext.currentTime;
+                const duration = 4.0; 
+                
+                const masterGain = audioContext.createGain();
+                masterGain.connect(audioContext.destination);
 
-                const osc1 = audioContext.createOscillator();
-                const gain1 = audioContext.createGain();
-                osc1.connect(gain1);
-                gain1.connect(audioContext.destination);
+                masterGain.gain.setValueAtTime(0.6, now); 
+                masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-                osc1.type = 'sine';
-                osc1.frequency.setValueAtTime(130.81, now); 
-                gain1.gain.setValueAtTime(0.5, now);
-                gain1.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+                const frequencies = [432.0, 648.0, 864.5];
 
-                const osc2 = audioContext.createOscillator();
-                const gain2 = audioContext.createGain();
-                osc2.connect(gain2);
-                gain2.connect(audioContext.destination);
+                frequencies.forEach((freq, index) => {
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.type = 'sine'; 
+                    oscillator.frequency.setValueAtTime(freq + (index * 0.7), now); 
 
-                osc2.type = 'sine';
-                osc2.frequency.setValueAtTime(261.63, now); 
-                gain2.gain.setValueAtTime(0.3, now);
-                gain2.gain.exponentialRampToValueAtTime(0.0001, now + duration * 0.8); 
+                    gainNode.gain.setValueAtTime(0, now); 
+                    gainNode.gain.linearRampToValueAtTime(0.3 / frequencies.length, now + 0.08); 
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(masterGain);
 
-                osc1.start(now);
-                osc2.start(now);
-                osc1.stop(now + duration);
-                osc2.stop(now + duration);
+                    oscillator.start(now);
+                    oscillator.stop(now + duration + 0.1); 
+                });
                 
             } catch (e) {
-                console.error("Errore nella riproduzione dell'audio:", e);
+                console.warn("Audio non riprodotto (richiede interazione utente):", e);
             }
         };
         
-        /** Funzione per ottenere un consiglio da Gemini */
-        const fetchGeminiTip = async (category) => {
-            // Implementazione di Gemini (stessa logica del file precedente)
-            fetchedTip = { text: null, sources: [] }; 
-            
-            let systemPrompt;
-            let userQuery;
-
-            if (category === 'WorkOut') {
-                systemPrompt = "Agisci come un coach di fitness. Fornisci un consiglio rapido, semplice (sotto le 30 parole) per il recupero, lo stretching o l'idratazione dopo una breve pausa di allenamento. Non usare titoli.";
-                userQuery = "Fornisci un consiglio veloce per la pausa di allenamento (30 secondi o 1 minuto) incentrato su idratazione, stretching o respirazione. Usa un tono energico e motivante. Rispondi in italiano.";
-            } else if (category === 'Focus Working') {
-                systemPrompt = "Agisci come un coach di crescita personale. Fornisci un consiglio rapido, semplice (sotto le 30 parole) per migliorare la concentrazione, la consapevolezza o l'apprendimento personale. Rispondi in italiano. Non usare titoli.";
-                userQuery = "Fornisci un consiglio motivante e veloce per una pausa dal lavoro (5-20 minuti), concentrato sulla crescita personale, la mindfulness o l'organizzazione. Usa un tono calmo e ispiratore.";
-            } else {
-                return; 
-            }
-
-            const apiKey = "" 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-
-            const payload = {
-                contents: [{ parts: [{ text: userQuery }] }],
-                tools: [{ "google_search": {} }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-            };
-
-            const maxRetries = 5;
-            let delay = 1000; 
-
-            for (let i = 0; i < maxRetries; i++) {
-                try {
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    if (!response.ok) {
-                        if (response.status === 429 && i < maxRetries - 1) {
-                            await new Promise(resolve => setTimeout(resolve, delay));
-                            delay *= 2; 
-                            continue;
-                        }
-                        throw new Error(`API call failed with status: ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    const candidate = result.candidates?.[0];
-
-                    if (candidate && candidate.content?.parts?.[0]?.text) {
-                        const text = candidate.content.parts[0].text;
-                        let sources = [];
-                        const groundingMetadata = candidate.groundingMetadata;
-
-                        if (groundingMetadata && groundingMetadata.groundingAttributions) {
-                            sources = groundingMetadata.groundingAttributions
-                                .map(attribution => ({
-                                    uri: attribution.web?.uri,
-                                    title: attribution.web?.title,
-                                }))
-                                .filter(source => source.uri && source.title); 
-                        }
-                        fetchedTip = { text, sources };
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Gemini fetch error:", error);
-                    if (i < maxRetries - 1) {
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        delay *= 2; 
-                    }
-                }
-            }
-        };
-
-
         // --- FUNZIONI TIMER CORE ---
 
         /** Formatta il tempo totale in HH:MM:SS */
@@ -468,18 +844,23 @@
             timerDisplay.textContent = formatTime(totalSecondsRemaining);
         };
 
-        /** Avvia il timer */
+        /** Avvia il timer (gestisce sia il manuale che l'automatico) */
         const startTimer = async () => {
             if (timerRunning) return;
 
-            if (totalSecondsRemaining <= 0) {
-                const h = parseInt(hoursInput.value) || 0;
-                const m = parseInt(minutesInput.value) || 0;
-                const s = parseInt(secondsInput.value) || 0;
-                totalSecondsRemaining = h * 3600 + m * 60 + s;
-                totalSecondsInitial = totalSecondsRemaining; 
+            if (!isAutomaticMode) {
+                if (totalSecondsRemaining <= 0) {
+                    const h = parseInt(hoursInput.value) || 0;
+                    const m = parseInt(minutesInput.value) || 0;
+                    const s = parseInt(secondsInput.value) || 0;
+                    totalSecondsRemaining = h * 3600 + m * 60 + s;
+                    totalSecondsInitial = totalSecondsRemaining; 
+                    if (totalSecondsInitial > 0 && lastPresetCategory === 'Default') {
+                         lastPresetCategory = 'Default';
+                    }
+                }
             }
-
+            
             if (totalSecondsRemaining <= 0) {
                 showModal("Attenzione", "Imposta un tempo maggiore di zero.");
                 return;
@@ -488,44 +869,34 @@
             timerRunning = true;
             updateButtonState(true);
             updateDisplay();
-            applyDynamicStyles(lastPresetCategory); 
             
-            // Avvia l'aggiornamento del visualizzatore ogni 100ms per un effetto più fluido
+            applyDynamicStyles(lastPresetCategory, true); 
+            
             visualizerInterval = setInterval(updateVisualizer, 100); 
 
             countdownInterval = setInterval(async () => {
                 totalSecondsRemaining--;
                 updateDisplay();
-
-                if (totalSecondsRemaining <= 0) {
-                    clearInterval(countdownInterval);
-                    clearInterval(visualizerInterval); // Ferma il visualizzatore
-                    timerRunning = false;
-                    updateButtonState(false);
-                    timerDisplay.textContent = "00:00:00";
-                    timerDisplay.classList.remove('timer-running');
-                    updateVisualizer(); // Aggiorna il visualizzatore allo stato "finito"
-                    
+                
+                if (totalSecondsRemaining === 0) {
                     playGong(); 
                     
-                    if (lastPresetCategory === 'WorkOut' || lastPresetCategory === 'Focus Working') {
-                        let loadingMsg;
-                        if (lastPresetCategory === 'WorkOut') {
-                            loadingMsg = "Caricamento del tuo **Consiglio WorkOut**...";
-                        } else { 
-                            loadingMsg = "Caricamento del tuo **Consiglio Crescita Personale**...";
-                        }
-                        
-                        showModal("Timer Scaduto!", `Il tempo è finito. Ben fatto! ${loadingMsg}`);
-                        
-                        await fetchGeminiTip(lastPresetCategory); 
-                        
-                        showModal("Timer Scaduto!", "Il tempo è finito. Ben fatto!");
+                    if (isAutomaticMode) {
+                        startNextPomodoroCycle();
                     } else {
+                        clearInterval(countdownInterval);
+                        clearInterval(visualizerInterval); 
+                        timerRunning = false;
+                        updateButtonState(false);
+                        
+                        totalSecondsRemaining = totalSecondsInitial;
+                        timerDisplay.textContent = formatTime(totalSecondsRemaining); 
+                        
+                        lastPresetCategory = 'Default';
+                        applyDynamicStyles(lastPresetCategory, false); 
+                        
                         showModal("Timer Scaduto!", "Il tempo è finito. Ben fatto!");
                     }
-                    
-                    applyDynamicStyles(lastPresetCategory);
                 }
             }, 1000);
         };
@@ -534,35 +905,49 @@
         const pauseTimer = () => {
             if (!timerRunning) return;
             clearInterval(countdownInterval);
-            clearInterval(visualizerInterval); // Ferma il visualizzatore
+            clearInterval(visualizerInterval); 
             timerRunning = false;
             updateButtonState(false);
-            timerDisplay.classList.remove('timer-running'); 
-            updateVisualizer(); // Aggiorna il visualizzatore allo stato "in pausa"
+            applyDynamicStyles(lastPresetCategory, false);
+            if (isAutomaticMode) {
+                showModal("Timer in Pausa", `Il ciclo Pomodoro è in pausa. Stato attuale: **${currentStateLabel.textContent}**`);
+            }
         };
 
-        /** Resetta il timer */
+        /** Resetta il timer (anche l'automatico) */
         const resetTimer = () => {
             pauseTimer();
+            resetPomodoroState();
+            
             const h = parseInt(hoursInput.value) || 0;
             const m = parseInt(minutesInput.value) || 0;
             const s = parseInt(secondsInput.value) || 0;
             totalSecondsRemaining = h * 3600 + m * 60 + s;
             totalSecondsInitial = totalSecondsRemaining; 
+            
             updateDisplay();
             updateButtonState(false);
-            timerDisplay.classList.remove('timer-running'); 
-            applyDynamicStyles(lastPresetCategory); 
-            updateVisualizer(); // Aggiorna il visualizzatore allo stato "reset"
+            
+            lastPresetCategory = 'Default';
+            applyDynamicStyles(lastPresetCategory, false); 
+            
+            showModal("Reset Completo", "Il timer è stato resettato.");
         };
 
         /** Gestisce lo stato dei pulsanti Start/Pausa e degli input */
         const updateButtonState = (isRunning) => {
             startButton.disabled = isRunning;
             pauseButton.disabled = !isRunning;
-            hoursInput.disabled = isRunning;
-            minutesInput.disabled = isRunning;
-            secondsInput.disabled = isRunning;
+            hoursInput.disabled = isRunning || isAutomaticMode; 
+            minutesInput.disabled = isRunning || isAutomaticMode;
+            secondsInput.disabled = isRunning || isAutomaticMode;
+            
+            // Disabilita salvataggio e input preset quando il timer è in esecuzione
+            savePresetButton.disabled = isRunning;
+            newPresetNameInput.disabled = isRunning;
+            newPresetHoursInput.disabled = isRunning;
+            newPresetMinutesInput.disabled = isRunning;
+            newPresetSecondsInput.disabled = isRunning;
         };
         
         // --- MODALE DI MESSAGGIO PERSONALIZZATO ---
@@ -570,35 +955,29 @@
         const showModal = (title, message) => {
             document.getElementById('modalTitle').textContent = title;
             
-            let finalMessage = message;
+            const category = lastPresetCategory === 'Default' ? 'Focus Working' : lastPresetCategory; 
+            const styleInfo = COLOR_MAP[category] || COLOR_MAP['Default'];
+            const modalColor = styleInfo.modalColor; 
             
-            if (fetchedTip.text && (lastPresetCategory === 'WorkOut' || lastPresetCategory === 'Focus Working') && title.includes("Timer Scaduto!")) {
-                let tipTitle, tipColor;
+            document.getElementById('modalTitle').className = `text-3xl font-bold mb-4 text-${modalColor}-400`;
+            
+            let borderColorClass = `border-${modalColor}-400`;
+            let buttonBgClass = `bg-${modalColor}-600 hover:bg-${modalColor}-700`;
 
-                if (lastPresetCategory === 'WorkOut') {
-                    tipTitle = "Consiglio WorkOut:";
-                    tipColor = "text-green-300";
-                } else { 
-                    tipTitle = "Consiglio Crescita Personale:";
-                    tipColor = "text-cyan-300"; 
-                }
-
-                let tipHtml = `<p class="text-xl font-bold mt-4 mb-2 ${tipColor}">${tipTitle}</p>`;
-                tipHtml += `<p class="text-lg text-gray-100 italic mb-4">${fetchedTip.text}</p>`;
-
-                if (fetchedTip.sources.length > 0) {
-                    tipHtml += `<p class="text-sm text-gray-500 mt-2">Fonti:</p><ul class="text-xs text-gray-500 list-disc list-inside space-y-1 text-left mx-auto max-w-xs">`;
-                    fetchedTip.sources.slice(0, 2).forEach(source => {
-                        tipHtml += `<li><a href="${source.uri}" target="_blank" class="hover:text-cyan-400 truncate" title="${source.title}">${source.title}</a></li>`;
-                    });
-                    tipHtml += `</ul>`;
-                }
-                
-                finalMessage += tipHtml;
-                fetchedTip = { text: null, sources: [] }; 
+            if (modalColor === 'pink') {
+                 borderColorClass = 'border-pink-400';
+                 buttonBgClass = 'bg-pink-600 hover:bg-pink-700';
+            } else if (modalColor === 'green') {
+                 borderColorClass = 'border-green-400';
+                 buttonBgClass = 'bg-green-600 hover:bg-green-700';
             }
             
-            document.getElementById('modalMessage').innerHTML = finalMessage;
+            const modalDiv = document.querySelector('#messageModal > div');
+            modalDiv.className = `bg-gray-800 p-8 rounded-xl shadow-2xl w-96 text-center border ${borderColorClass}`;
+            
+            closeModalButton.className = `${buttonBgClass} text-white font-bold py-2 px-6 rounded-xl transition shadow-md`;
+
+            document.getElementById('modalMessage').innerHTML = message;
             messageModal.classList.remove('hidden');
         };
 
@@ -609,34 +988,44 @@
         // --- INIZIALIZZAZIONE ---
 
         // Controlli Timer
-        startButton.addEventListener('click', startTimer);
+        startButton.addEventListener('click', () => {
+            if (!audioContext) {
+                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+
+            if (isAutomaticMode) {
+                 startTimer();
+            } else {
+                 startTimer();
+            }
+        });
         pauseButton.addEventListener('click', pauseTimer);
         resetButton.addEventListener('click', resetTimer);
 
-        // Input Time
+        // Input Time (Modalità Manuale)
         [hoursInput, minutesInput, secondsInput].forEach(input => {
-            input.addEventListener('change', resetTimer);
-            input.addEventListener('input', (e) => {
-                let val = parseInt(e.target.value) || 0;
-                let max = parseInt(e.target.max);
-                let min = parseInt(e.target.min);
-
-                if (val > max) e.target.value = max;
-                if (val < min) e.target.value = min;
+            input.addEventListener('input', () => {
+                pauseTimer();
+                resetPomodoroState();
+                lastPresetCategory = 'Default';
                 
-                lastPresetCategory = 'Focus Working'; 
-                fetchedTip = { text: null, sources: [] }; 
+                const h = parseInt(hoursInput.value) || 0;
+                const m = parseInt(minutesInput.value) || 0;
+                const s = parseInt(secondsInput.value) || 0;
+                totalSecondsRemaining = h * 3600 + m * 60 + s;
+                totalSecondsInitial = totalSecondsRemaining; 
                 
-                resetTimer(); 
+                updateDisplay();
+                applyDynamicStyles(lastPresetCategory, false); 
             });
         });
 
-        // Gestione Preset (Load dei timer statici) - Uniamo gli ascoltatori per entrambe le liste
-        [focusPresetsList, workoutPresetsList].forEach(list => {
-            list.addEventListener('click', (e) => {
-                const button = e.target.closest('.preset-button');
-                if (!button) return;
-
+        // Gestione Preset Standard
+        document.querySelectorAll('.preset-button').forEach(button => {
+            button.addEventListener('click', () => {
                 const name = button.dataset.name;
                 const category = button.dataset.category;
                 const h = parseInt(button.dataset.h) || 0;
@@ -646,17 +1035,47 @@
                 loadPreset({ name: name, hours: h, minutes: m, seconds: s }, category);
             });
         });
+        
+        // Gestione Preset Pomodoro Automatico
+        document.querySelectorAll('.pomodoro-start-button').forEach(button => {
+            button.addEventListener('click', () => {
+                pauseTimer();
+                
+                isAutomaticMode = true;
+                currentMode = 'IDLE'; 
+                
+                pomodoroTimes.work = parseInt(button.dataset.work) * 60;
+                pomodoroTimes.short = parseInt(button.dataset.short) * 60;
+                pomodoroTimes.long = parseInt(button.dataset.long) * 60;
+                pomodoroTimes.totalCycles = parseInt(button.dataset.cycles) || 4;
+                
+                lastPresetCategory = button.dataset.category;
+                
+                showModal("Avvio Ciclo Pomodoro", `Inizierai il ciclo automatico di **${pomodoroTimes.totalCycles}** Pomodori. Lavoro: ${pomodoroTimes.work/60}' Pausa Breve: ${pomodoroTimes.short/60}'`);
+                
+                startNextPomodoroCycle();
+            });
+        });
+
+        // Event Listener per il Salvataggio del Preset Utente
+        savePresetButton.addEventListener('click', saveNewPreset);
+
 
         // Chiusura Modale
         closeModalButton.addEventListener('click', hideModal);
 
         // Funzione di setup iniziale
         const init = () => {
-            // 1. Crea le barre del visualizzatore
             createVisualizerBars(); 
+            resetTimer(); 
+            updateButtonState(false);
+            timerDisplay.textContent = "00:00:00"; 
+            currentStateLabel.textContent = "RESET";
             
-            // 2. Carica il preset di default
-            loadPreset({ name: "Default", hours: 0, minutes: 20, seconds: 0 }, 'Focus Working');
+            // Se Firebase è già pronto (molto raro), carica subito i dati
+            if (window.firebaseReady) {
+                 window.loadUserPresets();
+            }
         };
 
         // Avvia l'inizializzazione
